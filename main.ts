@@ -1,63 +1,74 @@
-// news-image-20261124 — entry program for the make.fun bounty
-// "Sum up 24 November's world news in one image" ($100).
+// main.ts — entrypoint for the news-image-20261124 entry on make.fun.
 //
-// The entry image lives in this repository as entry.png (1024x1024,
-// a dense newspaper front page of Tuesday 24 November 2026: 46
-// stories, 13 pictured with original flat illustrations, a UTC
-// timeline, a day-in-numbers strip, a pinned world map, 33
-// one-line briefs, a DATE CHECK box and a verification footer).
-// This program copies it byte-for-byte to /output/entry.png.
-//
-// Node 22, standard library only. No network, no randomness, no
-// timestamps — every run writes exactly the same bytes.
-//
-// Usage: node main.ts [output-dir-or-file]
-//   - no argument: writes /output/entry.png
-//   - a directory: writes <dir>/entry.png
-//   - a path ending in .png: writes that file
-//   - OUTPUT_DIR env var is honoured when no argument is given.
+// The deliverable of this entry is the newspaper front-page image that
+// sits next to this file as entry.png. My whole job here is to carry
+// that image to wherever the grader expects it, byte for byte, and to
+// prove afterwards that the copy arrived intact.
 
-import { createHash } from "node:crypto";
 import { copyFileSync, mkdirSync, readFileSync, statSync } from "node:fs";
+import { createHash } from "node:crypto";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
+// The source image always lives in the same folder as this script,
+// so resolve it from the script's own location rather than from
+// whatever directory the caller happens to run in.
 const here = dirname(fileURLToPath(import.meta.url));
-const source = join(here, "entry.png");
+const imagePath = join(here, "entry.png");
 
-// A trailing ".png" always means a file path; anything else is
-// treated as a directory.
-function resolveOutputPath(target) {
-  const resolved = resolve(target);
-  return resolved.endsWith(".png") ? resolved : join(resolved, "entry.png");
+// Decide where the image has to land. Priority: an explicit path on
+// the command line, then the OUTPUT_DIR environment variable, then
+// the conventional /output folder. A destination ending in ".png" is
+// taken to be the file itself; anything else is treated as a folder
+// and the image keeps its entry.png name inside it.
+function destinationPath(): string {
+  const asked = process.argv[2] ?? process.env.OUTPUT_DIR ?? "/output";
+  const absolute = resolve(asked);
+  return absolute.endsWith(".png") ? absolute : join(absolute, "entry.png");
 }
 
-const target = process.argv[2] ?? process.env.OUTPUT_DIR ?? "/output";
-const outputPath = resolveOutputPath(target);
-
-mkdirSync(dirname(outputPath), { recursive: true });
-copyFileSync(source, outputPath);
-
-// Verify the copy landed whole: same byte count as the source image.
-// A short write must fail loudly instead of shipping a broken entry.
-const sourceBytes = statSync(source).size;
-const outputBytes = statSync(outputPath).size;
-if (outputBytes !== sourceBytes) {
-  throw new Error(
-    `Copy mismatch: wrote ${outputBytes} bytes, expected ${sourceBytes} bytes from ${source}`,
-  );
+// SHA-256 fingerprint of a file's full contents, used to prove that
+// the copied bytes are the original bytes and not just the same size.
+function fingerprint(path: string): string {
+  return createHash("sha256").update(readFileSync(path)).digest("hex");
 }
 
-// Equal size is necessary but not sufficient — a same-length file could
-// still differ in content. Compare SHA-256 digests so a corrupted or
-// truncated-but-padded copy also fails loudly instead of shipping.
-const digest = (path) =>
-  createHash("sha256").update(readFileSync(path)).digest("hex");
-const sourceDigest = digest(source);
-const outputDigest = digest(outputPath);
-if (outputDigest !== sourceDigest) {
-  throw new Error(
-    `Copy mismatch: sha256 of ${outputPath} is ${outputDigest}, expected ${sourceDigest} from ${source}`,
-  );
+function deliver(): void {
+  const target = destinationPath();
+
+  // Guard the source before copying anything: a missing image should
+  // fail here with a clear message, and an empty one is never worth
+  // delivering. The size recorded here is reused by the checks below.
+  let originalSize: number;
+  try {
+    originalSize = statSync(imagePath).size;
+  } catch {
+    throw new Error(`source image is missing: ${imagePath}`);
+  }
+  if (originalSize === 0) {
+    throw new Error(`source image is empty: ${imagePath}`);
+  }
+
+  // Create the destination folder chain if it is not there yet,
+  // then perform the copy itself.
+  mkdirSync(dirname(target), { recursive: true });
+  copyFileSync(imagePath, target);
+
+  // First check: both files must report the exact same byte count.
+  const deliveredSize = statSync(target).size;
+  if (deliveredSize !== originalSize) {
+    throw new Error(
+      `copy failed: entry.png is ${originalSize} bytes but the copy is ${deliveredSize} bytes`,
+    );
+  }
+
+  // Second check: the digests must match, so a same-sized but altered
+  // copy is still caught instead of silently passing.
+  if (fingerprint(target) !== fingerprint(imagePath)) {
+    throw new Error("copy failed: the delivered image's sha256 differs from entry.png");
+  }
+
+  console.log(`Delivered entry.png to ${target} (${deliveredSize} bytes)`);
 }
-console.log(`Wrote ${outputPath} (${outputBytes} bytes, sha256 ${outputDigest})`);
+
+deliver();
